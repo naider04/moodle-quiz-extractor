@@ -49,8 +49,11 @@ function getFirestore() {
     if (fs.existsSync(local)) cred = local;
   }
   if (!cred) return null;
-  admin.initializeApp({ credential: admin.credential.cert(cred) });
-  firestore = admin.firestore();
+  // firebase-admin >= 14: cert() is top-level and Firestore lives in the
+  // firebase-admin/firestore subpath (admin.credential / admin.firestore are gone).
+  admin.initializeApp({ credential: admin.cert(cred) });
+  const { getFirestore } = require('firebase-admin/firestore');
+  firestore = getFirestore();
   return firestore;
 }
 

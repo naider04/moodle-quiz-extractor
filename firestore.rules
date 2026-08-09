@@ -1,0 +1,12 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // The bank is study material: anyone can read it (e.g. a future viewer).
+    // Writes come only from the server via the firebase-admin SDK, which
+    // bypasses these rules.
+    match /{document=**} {
+      allow read: if true;
+      allow write: if false;
+    }
+  }
+}
