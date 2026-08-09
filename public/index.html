@@ -222,14 +222,12 @@ function renderQuestion(q) {
   div.className = 'q';
 
   const num = document.createElement('div');
-  num.className = 'q-num ' + (q.isCorrect ? 'correct' : q.isWrong ? 'wrong' : q.questionBank ? 'bank' : 'partial');
-  num.textContent = q.questionBank
-    ? `P${q.questionNumber}`
-    : q.isCorrect
-      ? `P${q.questionNumber} — ✓ Correcta`
-      : q.isWrong
-        ? `P${q.questionNumber} — ✗ Incorrecta`
-        : `P${q.questionNumber} — ${q.markObtained}/${q.markMax}`;
+  num.className = 'q-num ' + (q.isCorrect ? 'correct' : q.isWrong ? 'wrong' : 'partial');
+  num.textContent = q.isCorrect
+    ? `P${q.questionNumber} — ✓ Correcta`
+    : q.isWrong
+      ? `P${q.questionNumber} — ✗ Incorrecta`
+      : `P${q.questionNumber} — ${q.markObtained}/${q.markMax}`;
   div.appendChild(num);
 
   const type = document.createElement('div');

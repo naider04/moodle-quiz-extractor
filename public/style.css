@@ -61,7 +61,6 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .q-num.correct{color:#69f0ae}
 .q-num.wrong{color:#ff5252}
 .q-num.partial{color:#ffd740}
-.q-num.bank{color:#9ccc65}
 .q-type{color:#666;font-size:.75em;margin-bottom:3px}
 .q-text{color:#e0e0e0;margin-bottom:8px;font-size:.95em;white-space:pre-wrap;overflow-wrap:break-word}
 .q-img{max-width:100%;border-radius:8px;margin:8px 0;border:1px solid #333}
