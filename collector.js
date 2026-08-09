@@ -988,7 +988,8 @@ function buildStaticGuide(servers) {
   .sub-answer.correct{background:#1b3a2a;color:#69f0ae;border:1px solid #2e7d4f}
   .sub-answer.wrong{background:#3a1b1b;color:#ff5252;border:1px solid #b71c1c}
   .sub-answer.partial{background:#3a3018;color:#ffd54f;border:1px solid #8a6d1f}
-  .ddwtos-answer{display:inline-block;margin:0 3px;padding:1px 6px;border-radius:4px;background:#1b3a2a;color:#69f0ae;font-weight:600;border:1px solid #2e7d4f;white-space:nowrap}
+  .ddwtos-answer{display:inline-block;margin:0 3px;padding:1px 6px;border-radius:4px;background:#2a2a2a;color:#cfd8dc;font-weight:600;border:1px solid #555;white-space:nowrap}
+  .q-text.ddwtos-ok .ddwtos-answer{background:#1b3a2a;color:#69f0ae;border:1px solid #2e7d4f}
   .feedback{color:#b388ff;font-size:.85em;margin-top:6px;padding:6px 10px;background:#1a1a2e;border-left:3px solid #7c4dff;border-radius:4px;font-style:italic;white-space:pre-wrap}
   .essay-label{color:#888;font-size:.78em;text-transform:uppercase;letter-spacing:.05em;margin-top:10px;margin-bottom:4px}
   .essay-response{color:#cfd8dc;font-size:.92em;line-height:1.7;white-space:pre-wrap;background:#111;border:1px solid #2a2a2a;border-radius:6px;padding:10px 14px;margin-top:4px}
@@ -1135,7 +1136,10 @@ function buildStaticGuide(servers) {
               html.push('<div class="q">');
               html.push(`<div class="q-num ${numCls}">${escapeHtml(numText)}</div>`);
               html.push(`<div class="q-type">${escapeHtml(q.type)}</div>`);
-              html.push(`<div class="q-text">${escapeHtmlKeepAnswerBoxes(q.questionText)}</div>`);
+              // ddwtos answers are only tinted green when the whole question
+              // earned max grade — otherwise we can't tell which gaps were right.
+              const ddwtosCls = q.type === 'ddwtos' && q.isCorrect ? ' ddwtos-ok' : '';
+              html.push(`<div class="q-text${ddwtosCls}">${escapeHtmlKeepAnswerBoxes(q.questionText)}</div>`);
 
           for (const img of q.images || []) {
             const src = img.localFile ? `resources/${img.localFile}` : img.url;

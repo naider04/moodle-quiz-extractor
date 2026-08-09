@@ -103,7 +103,8 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .sub-answer.correct{background:#1b3a2a;color:#69f0ae;border:1px solid #2e7d4f}
 .sub-answer.wrong{background:#3a1b1b;color:#ff5252;border:1px solid #b71c1c}
 .sub-answer.partial{background:#3a3018;color:#ffd54f;border:1px solid #8a6d1f}
-.ddwtos-answer{display:inline-block;margin:0 3px;padding:1px 6px;border-radius:4px;background:#1b3a2a;color:#69f0ae;font-weight:600;border:1px solid #2e7d4f;white-space:nowrap}
+.ddwtos-answer{display:inline-block;margin:0 3px;padding:1px 6px;border-radius:4px;background:#2a2a2a;color:#cfd8dc;font-weight:600;border:1px solid #555;white-space:nowrap}
+.q-text.ddwtos-ok .ddwtos-answer{background:#1b3a2a;color:#69f0ae;border:1px solid #2e7d4f}
 
 /* Floating quiz/attempt widget */
 #float-box{position:fixed;right:16px;bottom:16px;width:280px;max-width:calc(100vw - 32px);background:#161625;border:1px solid #2a2a3a;border-radius:12px;padding:12px 14px;box-shadow:0 10px 30px rgba(0,0,0,.55);z-index:1000}
