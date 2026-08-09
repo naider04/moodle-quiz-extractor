@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+
+# Generated output — contains personal quiz data (grades, attempts, media).
+# The app generates this at runtime after a collection; do not commit it.
+output/
+
+# Logs
+*.log
+
+# Local test artifacts
+local-output_files/
+
+# Dev scripts not part of the web app
+scripts/

@@ -1,0 +1,513 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Moodle Quiz Collector</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- ─── Login ─── -->
+<div id="login-screen" class="screen active">
+  <div class="card">
+    <h1>📚 Moodle Quiz Collector</h1>
+    <p class="subtitle">Extract all your quiz questions into a study guide</p>
+    <form id="login-form">
+      <label for="moodle-url">Moodle URL</label>
+      <input type="url" id="moodle-url" placeholder="https://aulagradob.unemi.edu.ec/" required>
+      <label for="username">Username</label>
+      <input type="text" id="username" placeholder="your_username" required>
+      <label for="password">Password</label>
+      <input type="password" id="password" placeholder="your_password" required>
+      <div id="login-error" class="error hidden"></div>
+      <button type="submit" id="login-btn">Log In & Collect</button>
+    </form>
+  </div>
+</div>
+
+<!-- ─── Progress / Result ─── -->
+<div id="progress-screen" class="screen">
+  <div class="card">
+    <h1>⏳ Collecting quizzes…</h1>
+    <p id="user-info" class="subtitle"></p>
+    <div id="log-box">
+      <div id="log-messages"></div>
+    </div>
+    <div id="progress-bar-container" class="hidden">
+      <div id="progress-bar"></div>
+    </div>
+    <div id="result-box" class="hidden">
+      <div id="result-summary"></div>
+      <div id="guide"></div>
+      <button id="new-btn" class="btn secondary" onclick="showLogin()">Collect Another Account</button>
+    </div>
+
+    <!-- Floating widget: shows the quiz/attempt currently in view -->
+    <div id="float-box" class="hidden">
+      <div class="float-label">Viendo</div>
+      <div id="float-quiz-name"></div>
+      <a id="float-attempt-link" target="_blank" rel="noopener">Abrir intento</a>
+    </div>
+  </div>
+</div>
+
+<script>
+const $loginScreen = document.getElementById('login-screen');
+const $progressScreen = document.getElementById('progress-screen');
+const $loginForm = document.getElementById('login-form');
+const $loginBtn = document.getElementById('login-btn');
+const $loginError = document.getElementById('login-error');
+const $userInfo = document.getElementById('user-info');
+const $logBox = document.getElementById('log-box');
+const $logMessages = document.getElementById('log-messages');
+const $resultBox = document.getElementById('result-box');
+const $resultSummary = document.getElementById('result-summary');
+const $floatBox = document.getElementById('float-box');
+const $floatQuizName = document.getElementById('float-quiz-name');
+const $floatLink = document.getElementById('float-attempt-link');
+const quizRegistry = [];
+let lastFloat = null;
+
+function showLogin() {
+  $loginScreen.classList.add('active');
+  $progressScreen.classList.remove('active');
+  $loginBtn.disabled = false;
+  $loginBtn.textContent = 'Log In & Collect';
+  $logMessages.innerHTML = '';
+  $resultBox.classList.add('hidden');
+  document.getElementById('guide').innerHTML = '';
+  quizRegistry.length = 0;
+  lastFloat = null;
+  $floatBox.classList.add('hidden');
+}
+
+function addLog(msg) {
+  const div = document.createElement('div');
+  div.textContent = msg;
+  $logMessages.appendChild(div);
+  // #log-box is the scrollable element (max-height + overflow-y:auto);
+  // scrolling #log-messages alone has no effect.
+  $logBox.scrollTop = $logBox.scrollHeight;
+}
+
+$loginForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  $loginError.classList.add('hidden');
+  $loginBtn.disabled = true;
+  $loginBtn.textContent = 'Logging in…';
+
+  const moodleUrl = document.getElementById('moodle-url').value.trim();
+  const username = document.getElementById('username').value.trim();
+  const password = document.getElementById('password').value;
+
+  try {
+    // Step 1: Login
+    addLog('Authenticating…');
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ moodleUrl, username, password }),
+    });
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || 'Login failed.');
+
+    addLog(`✓ Logged in as ${data.fullname}`);
+    $userInfo.textContent = data.fullname;
+
+    // Switch to progress screen
+    $loginScreen.classList.remove('active');
+    $progressScreen.classList.add('active');
+    $resultBox.classList.add('hidden');
+    $logMessages.innerHTML = '';
+    addLog(`Starting collection on ${data.baseUrl}…`);
+
+    // Step 2: SSE for collection progress
+    const evtSource = new EventSource(
+      `/api/collect?baseUrl=${encodeURIComponent(data.baseUrl)}&token=${encodeURIComponent(data.token)}&userId=${data.userId}`
+    );
+
+    evtSource.addEventListener('progress', (e) => {
+      const { message } = JSON.parse(e.data);
+      addLog(message);
+    });
+
+    evtSource.addEventListener('done', async (e) => {
+      const result = JSON.parse(e.data);
+      evtSource.close();
+      addLog('\n═══ DONE ═══');
+      addLog(`${result.questionCount} questions (${result.correctCount} correct)`);
+      addLog(`${result.mediaCount} media files downloaded`);
+      $resultSummary.innerHTML = `
+        <div class="result-stats">
+          <div class="stat"><span class="stat-num">${result.questionCount}</span> questions</div>
+          <div class="stat"><span class="stat-num">${result.correctCount}</span> correct</div>
+          <div class="stat"><span class="stat-num">${result.mediaCount}</span> media</div>
+        </div>`;
+      // Render the questions online
+      try {
+        const res = await fetch('/api/result');
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        renderGuide(await res.json());
+      } catch (err) {
+        addLog(`⚠ No se pudieron cargar las preguntas: ${err.message}`);
+      }
+      $resultBox.classList.remove('hidden');
+    });
+
+    evtSource.addEventListener('error', (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        addLog(`❌ Error: ${data.message}`);
+      } catch {
+        addLog('❌ Connection lost.');
+      }
+      evtSource.close();
+      $resultBox.classList.remove('hidden');
+    });
+
+    evtSource.onerror = () => {
+      // SSE connection closed (could be normal end or error)
+      evtSource.close();
+    };
+  } catch (err) {
+    $loginError.textContent = err.message;
+    $loginError.classList.remove('hidden');
+    $loginBtn.disabled = false;
+    $loginBtn.textContent = 'Log In & Collect';
+  }
+});
+
+// ─── Online study-guide rendering ──────────────────────────────────
+function toggleAll(btn) {
+  const open = document.querySelectorAll('#guide .course-quizzes.open, #guide .quiz-body.open');
+  const closed = document.querySelectorAll('#guide .course-quizzes:not(.open), #guide .quiz-body:not(.open)');
+  if (closed.length > 0) {
+    closed.forEach((el) => el.classList.add('open'));
+    btn.textContent = 'Colapsar todo';
+  } else {
+    open.forEach((el) => el.classList.remove('open'));
+    btn.textContent = 'Expandir todo';
+  }
+  updateFloat();
+}
+
+function renderQuestion(q) {
+  const div = document.createElement('div');
+  div.className = 'q';
+
+  const num = document.createElement('div');
+  num.className = 'q-num ' + (q.isCorrect ? 'correct' : q.isWrong ? 'wrong' : 'partial');
+  num.textContent = q.isCorrect
+    ? `P${q.questionNumber} — ✓ Correcta`
+    : q.isWrong
+      ? `P${q.questionNumber} — ✗ Incorrecta`
+      : `P${q.questionNumber} — ${q.markObtained}/${q.markMax}`;
+  div.appendChild(num);
+
+  const type = document.createElement('div');
+  type.className = 'q-type';
+  type.textContent = q.type;
+  div.appendChild(type);
+
+  const text = document.createElement('div');
+  text.className = 'q-text';
+  // For ddwtos questions the collector already substitutes each gap's answer
+  // into the question text. If old data still contains placeholder spans
+  // (<span class="placeN">…</span>), fill them in here as a fallback.
+  let processedText = q.questionText;
+  if (q.type === 'ddwtos' && q.subQuestions && q.subQuestions.length) {
+    q.subQuestions.forEach((sub, index) => {
+      const placeholderRegex = new RegExp(`(<span class="place${index + 1}">)[^<]*(</span>)`, 'g');
+      processedText = processedText.replace(placeholderRegex, `$1${sub.selectedText || ''}$2`);
+    });
+  }
+  text.innerHTML = processedText;
+  div.appendChild(text);
+
+  for (const img of q.images) {
+    const el = document.createElement('img');
+    el.className = 'q-img';
+    el.alt = 'question image';
+    el.loading = 'lazy';
+    el.src = img.localFile ? `/resources/${encodeURIComponent(img.localFile)}` : img.url;
+    div.appendChild(el);
+  }
+
+  // Audio players
+  for (const a of (q.audios || [])) {
+    const el = document.createElement('audio');
+    el.className = 'q-audio';
+    el.controls = true;
+    el.preload = 'none';
+    el.src = a.localFile ? `/resources/${encodeURIComponent(a.localFile)}` : a.url;
+    div.appendChild(el);
+  }
+
+  // Sub-questions (multianswer / cloze).
+  // ddwtos answers are already substituted into the question text, so we
+  // skip the raw draggable-choices list for that type.
+  if (q.type !== 'ddwtos') {
+  for (const sub of (q.subQuestions || [])) {
+    const subDiv = document.createElement('div');
+    subDiv.className = 'sub-q';
+
+    if (sub.questionText) {
+      const stemEl = document.createElement('div');
+      stemEl.className = 'sub-q-text';
+      stemEl.textContent = sub.questionText;
+      subDiv.appendChild(stemEl);
+    }
+
+    if (sub.type === 'select') {
+      // Match question row → show only the student's choice, boxed so it's
+      // clearly the selected answer (separate from the prompt above it).
+      const cls = sub.isCorrect ? 'correct' : sub.isIncorrect ? 'wrong' : q.isCorrect ? 'correct' : q.isWrong ? 'wrong' : 'partial';
+      const ansEl = document.createElement('div');
+      ansEl.className = 'sub-answer ' + cls;
+      ansEl.textContent = sub.selectedText || '— (sin selección)';
+      subDiv.appendChild(ansEl);
+    } else if (sub.options && sub.options.length > 0) {
+      for (const opt of sub.options) {
+        let cls = 'not-selected';
+        if (opt.markedCorrect) cls = 'correct';
+        else if (opt.markedIncorrect && opt.selected) cls = 'selected-wrong';
+        else if (sub.isCorrect && opt.selected) cls = 'correct';
+        else if (sub.isIncorrect && opt.selected) cls = 'selected-wrong';
+        else if (!sub.isCorrect && !sub.isIncorrect && opt.selected) cls = 'selected';
+        const optEl = document.createElement('div');
+        optEl.className = 'sub-opt ' + cls;
+        const strong = document.createElement('strong');
+        strong.textContent = opt.letter;
+        optEl.appendChild(strong);
+        if (opt.text) optEl.appendChild(document.createTextNode(' ' + opt.text));
+        subDiv.appendChild(optEl);
+      }
+    } else if (sub.selectedText) {
+      const ansEl = document.createElement('div');
+      ansEl.className = 'sub-answer ' + (sub.isCorrect ? 'correct' : sub.isIncorrect ? 'wrong' : 'partial');
+      ansEl.textContent = sub.selectedText;
+      subDiv.appendChild(ansEl);
+    }
+
+    div.appendChild(subDiv);
+  }
+  }
+
+  const isPartial = !q.isCorrect && !q.isWrong;
+  for (const opt of q.options) {
+    let cls = 'not-selected';
+    if (opt.markedCorrect) cls = 'correct';
+    else if (opt.markedIncorrect && opt.selected) cls = 'selected-wrong';
+    else if (q.isCorrect && opt.selected) cls = 'correct';
+    else if (q.isWrong && opt.selected) cls = 'selected-wrong';
+    else if (isPartial && opt.selected) cls = 'selected';
+    const el = document.createElement('div');
+    el.className = 'opt ' + cls;
+    const strong = document.createElement('strong');
+    strong.textContent = opt.letter;
+    el.appendChild(strong);
+    if (opt.text) el.appendChild(document.createTextNode(' ' + opt.text));
+    for (const img of (opt.optionImages || [])) {
+      el.appendChild(document.createElement('br'));
+      const imgEl = document.createElement('img');
+      imgEl.className = 'opt-img';
+      imgEl.alt = 'option image';
+      imgEl.src = img.localFile ? `/resources/${encodeURIComponent(img.localFile)}` : img.url;
+      el.appendChild(imgEl);
+    }
+    div.appendChild(el);
+  }
+
+  if (q.essayResponse) {
+    const lbl = document.createElement('div');
+    lbl.className = 'essay-label';
+    lbl.textContent = 'Tu respuesta:';
+    div.appendChild(lbl);
+    const resp = document.createElement('div');
+    resp.className = 'essay-response';
+    resp.textContent = q.essayResponse;
+    div.appendChild(resp);
+  }
+
+  if (q.feedback) {
+    const fb = document.createElement('div');
+    fb.className = 'feedback';
+    fb.textContent = q.feedback;
+    div.appendChild(fb);
+  }
+
+  return div;
+}
+
+function updateFloat() {
+  const guideVisible = !$resultBox.classList.contains('hidden');
+  const mid = window.innerHeight / 2;
+  let hit = null;
+  if (guideVisible) {
+    for (const entry of quizRegistry) {
+      if (!entry.attemptsData.length) continue;
+      const r = entry.el.getBoundingClientRect();
+      if (r.top <= mid && r.bottom >= mid) {
+        let attempt = entry.attemptsData[0];
+        if (entry.attemptsData.length > 1) {
+          const hdrs = entry.el.querySelectorAll('.attempt-hdr');
+          for (let i = 0; i < hdrs.length; i++) {
+            if (hdrs[i].getBoundingClientRect().top <= mid) attempt = entry.attemptsData[i];
+          }
+        }
+        hit = { entry, attempt };
+        break;
+      }
+    }
+  }
+  if (hit) lastFloat = hit;
+  const cur = hit || lastFloat;
+  if (!cur || !guideVisible) {
+    $floatBox.classList.add('hidden');
+    return;
+  }
+  $floatBox.classList.remove('hidden');
+  const multi = cur.entry.attemptsData.length > 1;
+  $floatQuizName.textContent = multi ? `${cur.entry.name} — Intento ${cur.attempt.attemptNumber}` : cur.entry.name;
+  if (cur.entry.cmid && cur.attempt.attemptId != null) {
+    $floatLink.href = `${cur.entry.baseUrl}/mod/quiz/review.php?attempt=${cur.attempt.attemptId}&cmid=${cur.entry.cmid}`;
+    $floatLink.classList.remove('disabled');
+    $floatLink.textContent = `Abrir intento ${cur.attempt.attemptNumber}`;
+  } else {
+    $floatLink.removeAttribute('href');
+    $floatLink.classList.add('disabled');
+    $floatLink.textContent = 'Sin enlace de revisión';
+  }
+}
+window.addEventListener('scroll', () => requestAnimationFrame(updateFloat), { passive: true });
+window.addEventListener('resize', updateFloat);
+
+function renderGuide(allData) {
+  const guide = document.getElementById('guide');
+  guide.innerHTML = '';
+  quizRegistry.length = 0;
+  lastFloat = null;
+
+  const legend = document.createElement('div');
+  legend.className = 'legend';
+  legend.innerHTML = `
+    <span><span class="dot g"></span> Correcta</span>
+    <span><span class="dot r"></span> Incorrecta (tu respuesta)</span>
+    <span><span class="dot y"></span> Parcial / Info</span>`;
+  guide.appendChild(legend);
+
+  const expandBtn = document.createElement('button');
+  expandBtn.className = 'expand-btn';
+  expandBtn.textContent = 'Expandir todo';
+  expandBtn.type = 'button';
+  expandBtn.onclick = () => toggleAll(expandBtn);
+  guide.appendChild(expandBtn);
+
+  for (const server of allData) {
+    const host = server.baseUrl.replace('https://', '');
+    const serverHdr = document.createElement('div');
+    serverHdr.className = 'server-hdr';
+    const h2 = document.createElement('h2');
+    h2.textContent = host;
+    serverHdr.appendChild(h2);
+    guide.appendChild(serverHdr);
+
+    for (const course of server.courses) {
+      const totalQ = course.quizzes.reduce((s, q) => s + q.questions.length, 0);
+      const correctQ = course.quizzes.reduce((s, q) => s + q.questions.filter((x) => x.isCorrect).length, 0);
+
+      const courseBlk = document.createElement('div');
+      courseBlk.className = 'course-blk';
+
+      const courseTitle = document.createElement('div');
+      courseTitle.className = 'course-title';
+      const nameSpan = document.createElement('span');
+      nameSpan.textContent = course.name;
+      const statsSpan = document.createElement('span');
+      statsSpan.className = 'stats';
+      statsSpan.textContent = `${course.quizzes.length} quizzes · ${correctQ}/${totalQ} correctas`;
+      courseTitle.append(nameSpan, statsSpan);
+
+      const courseQuizzes = document.createElement('div');
+      courseQuizzes.className = 'course-quizzes';
+      courseTitle.addEventListener('click', () => courseQuizzes.classList.toggle('open'));
+
+      for (const quiz of course.quizzes) {
+        const quizCorrect = quiz.questions.filter((q) => q.isCorrect).length;
+        const quizTotal = quiz.questions.length;
+
+        const quizBlk = document.createElement('div');
+        quizBlk.className = 'quiz-blk';
+
+        const quizHdr = document.createElement('div');
+        quizHdr.className = 'quiz-hdr';
+        const left = document.createElement('div');
+        const nameEl = document.createElement('span');
+        nameEl.className = 'name';
+        nameEl.textContent = quiz.name;
+        if (quiz.cmid) {
+          const link = document.createElement('a');
+          link.className = 'quiz-link';
+          link.href = `${server.baseUrl}/mod/quiz/view.php?id=${quiz.cmid}`;
+          link.target = '_blank';
+          link.rel = 'noopener';
+          link.title = `Abrir "${quiz.name}" en Moodle`;
+          link.innerHTML = '<svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M14 3h7v7h-2V6.4l-9.3 9.3-1.4-1.4L17.6 5H14V3zM5 5h6v2H5v12h12v-6h2v8H3V5h2z"/></svg>';
+          link.addEventListener('click', (e) => e.stopPropagation());
+          nameEl.appendChild(link);
+        }
+        const infoEl = document.createElement('div');
+        infoEl.className = 'info';
+        infoEl.textContent = `${quiz.attempts} intento(s) · ${quizCorrect}/${quizTotal} correctas`;
+        left.append(nameEl, infoEl);
+
+        const scoreEl = document.createElement('span');
+        scoreEl.className = 'score';
+        scoreEl.style.color =
+          quiz.bestGrade >= quiz.sumGrades ? '#69f0ae' : quiz.bestGrade > 0 ? '#ffd740' : '#ff5252';
+        scoreEl.textContent = quiz.bestGrade != null ? `${quiz.bestGrade}/${quiz.sumGrades}` : '?';
+        quizHdr.append(left, scoreEl);
+
+        const quizBody = document.createElement('div');
+        quizBody.className = 'quiz-body';
+        quizHdr.addEventListener('click', () => quizBody.classList.toggle('open'));
+
+        // All finished attempts, or a single synthetic attempt for old data.
+        const attemptsData = quiz.attemptsData ||
+          (quiz.questions && quiz.questions.length
+            ? [{ attemptNumber: 1, score: quiz.bestGrade, questions: quiz.questions }]
+            : []);
+
+        if (!attemptsData.length) {
+          const noReview = document.createElement('div');
+          noReview.className = 'no-review';
+          noReview.textContent = 'No se pudo obtener la revisión';
+          quizBody.appendChild(noReview);
+        } else {
+          for (const attempt of attemptsData) {
+            if (attemptsData.length > 1) {
+              const attHdr = document.createElement('div');
+              attHdr.className = 'attempt-hdr';
+              attHdr.textContent =
+                `Intento ${attempt.attemptNumber} — ${attempt.score != null ? attempt.score + '/' + quiz.sumGrades : '?'}`;
+              quizBody.appendChild(attHdr);
+            }
+            for (const q of attempt.questions) quizBody.appendChild(renderQuestion(q));
+          }
+        }
+
+        quizRegistry.push({ el: quizBody, name: quiz.name, baseUrl: server.baseUrl, cmid: quiz.cmid, attemptsData });
+        quizBlk.append(quizHdr, quizBody);
+        courseQuizzes.appendChild(quizBlk);
+      }
+
+      courseBlk.append(courseTitle, courseQuizzes);
+      guide.appendChild(courseBlk);
+    }
+  }
+  updateFloat();
+}
+</script>
+</body>
+</html>
