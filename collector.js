@@ -268,6 +268,7 @@ function parseQuestion(q) {
   const isMultianswer = (q.type || '') === 'multianswer';
   const isMatch = (q.type || '') === 'match';
   const isDDWTOS = (q.type || '') === 'ddwtos';
+  const isGapSelect = (q.type || '') === 'gapselect';
 
   let questionText = '';
   let options = [];
@@ -362,10 +363,11 @@ function parseQuestion(q) {
         }
       }
     }
-  } else if (isDDWTOS) {
-    // Parse ddwtos (drag-and-drop words into text) question.
-    // We keep the RAW qtext HTML so we can substitute the student's answer
-    // into each gap, then strip the remaining tags.
+  } else if (isDDWTOS || isGapSelect) {
+    // Parse ddwtos (drag-and-drop words into text) and gapselect (select a
+    // word for each gap) questions. Both embed their gaps in the question
+    // text; we keep the RAW qtext HTML so we can substitute the student's
+    // answer into each gap, then strip the remaining tags.
     const qtextMatch = html.match(
       /<div class="qtext"[^>]*>([\s\S]*?)<\/div>\s*(?:<\/div>|<fieldset|<div class="(?:ablock|answer))/i,
     );
@@ -456,30 +458,57 @@ function parseQuestion(q) {
 
     // Substitute each gap's answer into the question text, wrapping the
     // student's answer in a boxed span so it stands out from the stem.
-    // 1) Replace the placeholder <span class="placeN">…</span> with the answer.
     let displayText = qtextHtml;
-    placeNums.forEach((placeNum) => {
-      const value = placeValues[placeNum];
-      const selectedIndex = value ? parseInt(value, 10) - 1 : -1;
-      const answer = selectedIndex >= 0 && selectedIndex < opts.length ? opts[selectedIndex].text : '';
-      const spanRe = new RegExp(
-        `<span[^>]*class="[^"]*place${placeNum}[^"]*"[^>]*>[\\s\\S]*?<\\/span>`,
-        'gi',
+    if (isDDWTOS) {
+      // 1) Replace the placeholder <span class="placeN">…</span> with the answer.
+      placeNums.forEach((placeNum) => {
+        const value = placeValues[placeNum];
+        const selectedIndex = value ? parseInt(value, 10) - 1 : -1;
+        const answer = selectedIndex >= 0 && selectedIndex < opts.length ? opts[selectedIndex].text : '';
+        const spanRe = new RegExp(
+          `<span[^>]*class="[^"]*place${placeNum}[^"]*"[^>]*>[\\s\\S]*?<\\/span>`,
+          'gi',
+        );
+        displayText = displayText.replace(spanRe, answer ? `<span class="ddwtos-answer">${answer}</span>` : '');
+      });
+      // 2) Fallback: textual "Vacío N Pregunta M" placeholders.
+      placeNums.forEach((placeNum) => {
+        const value = placeValues[placeNum];
+        const selectedIndex = value ? parseInt(value, 10) - 1 : -1;
+        const answer = selectedIndex >= 0 && selectedIndex < opts.length ? opts[selectedIndex].text : '';
+        if (!answer) return;
+        const vacioRe = new RegExp(
+          `(?:&#160;|&nbsp;|\\s)+Vacío\\s*${placeNum}\\s*Pregunta\\s*\\d+`,
+          'gi',
+        );
+        displayText = displayText.replace(vacioRe, ` <span class="ddwtos-answer">${answer}</span> `);
+      });
+    } else if (isGapSelect) {
+      // gapselect: each gap is a <select> (usually wrapped in a
+      // <span class="control"> with a sr-only "Vacío N Pregunta M" label)
+      // embedded directly in the question text. Replace the whole control
+      // span with the student's chosen option in a boxed span.
+      const selectToAnswer = (selectHtml) => {
+        let selected = '';
+        const optRe = /<option[^>]*value="([^"]*)"([^>]*)>([\s\S]*?)<\/option>/gi;
+        let om;
+        while ((om = optRe.exec(selectHtml)) !== null) {
+          const text = stripHtml(om[3]).trim();
+          if (!text || om[1] === '') continue;
+          if (/selected\s*=\s*["']?selected/i.test(om[0])) selected = text;
+        }
+        return selected ? `<span class="ddwtos-answer">${selected}</span>` : ' ';
+      };
+      displayText = displayText.replace(
+        /<span[^>]*class="[^"]*control[^"]*"[^>]*>[\s\S]*?<\/span>/gi,
+        (whole) => {
+          const selMatch = whole.match(/<select[^>]*>([\s\S]*?)<\/select>/i);
+          return selMatch ? selectToAnswer(selMatch[1]) : whole;
+        },
       );
-      displayText = displayText.replace(spanRe, answer ? `<span class="ddwtos-answer">${answer}</span>` : '');
-    });
-    // 2) Fallback: textual "Vacío N Pregunta M" placeholders.
-    placeNums.forEach((placeNum) => {
-      const value = placeValues[placeNum];
-      const selectedIndex = value ? parseInt(value, 10) - 1 : -1;
-      const answer = selectedIndex >= 0 && selectedIndex < opts.length ? opts[selectedIndex].text : '';
-      if (!answer) return;
-      const vacioRe = new RegExp(
-        `(?:&#160;|&nbsp;|\\s)+Vacío\\s*${placeNum}\\s*Pregunta\\s*\\d+`,
-        'gi',
-      );
-      displayText = displayText.replace(vacioRe, ` <span class="ddwtos-answer">${answer}</span> `);
-    });
+      // Fallback: a bare <select> not wrapped in a control span.
+      displayText = displayText.replace(/<select[^>]*>([\s\S]*?)<\/select>/gi, (m, inner) => selectToAnswer(inner));
+    }
     // Protect the answer boxes from stripHtml, then restore them.
     const BOX_OPEN = '%%DDWTOS_OPEN%%';
     const BOX_CLOSE = '%%DDWTOS_CLOSE%%';
@@ -615,7 +644,9 @@ function parseQuestion(q) {
   let imgMatch;
   while ((imgMatch = imgRegex.exec(html)) !== null) {
     const src = imgMatch[1].replace(/&amp;/g, '&');
-    if (src.includes('pluginfile.php') && !src.includes('/question/answer/')) {
+    // Skip answer-option images and duplicates (the same image often appears
+    // both in the question text and in the right-answer feedback).
+    if (src.includes('pluginfile.php') && !src.includes('/question/answer/') && !images.includes(src)) {
       images.push(src);
     }
   }
@@ -1138,7 +1169,7 @@ function buildStaticGuide(servers) {
               html.push(`<div class="q-type">${escapeHtml(q.type)}</div>`);
               // ddwtos answers are only tinted green when the whole question
               // earned max grade — otherwise we can't tell which gaps were right.
-              const ddwtosCls = q.type === 'ddwtos' && q.isCorrect ? ' ddwtos-ok' : '';
+              const ddwtosCls = (q.type === 'ddwtos' || q.type === 'gapselect') && q.isCorrect ? ' ddwtos-ok' : '';
               html.push(`<div class="q-text${ddwtosCls}">${escapeHtmlKeepAnswerBoxes(q.questionText)}</div>`);
 
           for (const img of q.images || []) {

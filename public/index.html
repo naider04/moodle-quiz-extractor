@@ -211,9 +211,10 @@ function renderQuestion(q) {
   div.appendChild(type);
 
   const text = document.createElement('div');
-  // ddwtos answers are green only when the question earned max grade; since we
-  // can't know which gaps are correct otherwise, they stay neutral gray.
-  text.className = (q.type === 'ddwtos' && q.isCorrect) ? 'q-text ddwtos-ok' : 'q-text';
+  // ddwtos/gapselect answers are green only when the question earned max
+  // grade; since we can't know which gaps are correct otherwise, they stay
+  // neutral gray.
+  text.className = (q.type === 'ddwtos' || q.type === 'gapselect') && q.isCorrect ? 'q-text ddwtos-ok' : 'q-text';
   // For ddwtos questions the collector already substitutes each gap's answer
   // into the question text. If old data still contains placeholder spans
   // (<span class="placeN">…</span>), fill them in here as a fallback.
