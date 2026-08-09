@@ -711,28 +711,39 @@ async function collect(baseUrl, token, userId, outDir, onMessage) {
 
   const downloadMedia = async (url, kind) => {
     if (!url || mediaMap.has(url)) return mediaMap.get(url) || null;
-    try {
-      // The plain /pluginfile.php endpoint does not accept wstoken and returns
-      // the Moodle login page (HTML) instead of the file. The web-service
-      // endpoint /webservice/pluginfile.php does accept the token.
-      let fixedUrl = url;
-      if (!/\/webservice\/pluginfile\.php\//.test(url)) {
-        fixedUrl = url.replace(/\/pluginfile\.php\//, '/webservice/pluginfile.php/');
+    // The plain /pluginfile.php endpoint does not accept wstoken and returns
+    // the Moodle login page (HTML) instead of the file. The web-service
+    // endpoint /webservice/pluginfile.php does accept the token.
+    let fixedUrl = url;
+    if (!/\/webservice\/pluginfile\.php\//.test(url)) {
+      fixedUrl = url.replace(/\/pluginfile\.php\//, '/webservice/pluginfile.php/');
+    }
+    const sep = fixedUrl.includes('?') ? '&' : '?';
+    const fullUrl = `${fixedUrl}${sep}token=${encodeURIComponent(token)}`;
+    // Retry transient failures (throttling, network hiccups) so a hiccup
+    // doesn't leave a question without its image/audio.
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const res = await fetch(fullUrl);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const ct = res.headers.get('content-type') || '';
+        // The login page is HTML — never accept it as media.
+        if (ct.includes('text/html')) throw new Error('got HTML login page instead of media');
+        const ext = guessExt(url, ct);
+        const isAudio = kind === 'audio' || (url.match(/\.(mp3|wav|ogg|oga|m4a|aac|flac|opus)(?:$|[?#])/i) && kind !== 'image');
+        const name = isAudio ? `audio_${++audioCounter}.${ext}` : `img_${++imgCounter}.${ext}`;
+        const buf = await res.buffer();
+        fs.writeFileSync(path.join(resourcesDir, name), buf);
+        mediaMap.set(url, name);
+        mediaTotal++;
+        return name;
+      } catch (e) {
+        if (attempt === 3) {
+          log(`  ⚠ No se pudo descargar ${kind} (${e.message}): ${url.slice(0, 90)}…`);
+          return null;
+        }
+        await sleep(700 * attempt);
       }
-      const sep = fixedUrl.includes('?') ? '&' : '?';
-      const res = await fetch(`${fixedUrl}${sep}token=${encodeURIComponent(token)}`);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const ct = res.headers.get('content-type') || '';
-      const ext = guessExt(url, ct);
-      const isAudio = kind === 'audio' || (url.match(/\.(mp3|wav|ogg|oga|m4a|aac|flac|opus)(?:$|[?#])/i) && kind !== 'image');
-      const name = isAudio ? `audio_${++audioCounter}.${ext}` : `img_${++imgCounter}.${ext}`;
-      const buf = await res.buffer();
-      fs.writeFileSync(path.join(resourcesDir, name), buf);
-      mediaMap.set(url, name);
-      mediaTotal++;
-      return name;
-    } catch (e) {
-      return null;
     }
   };
 
