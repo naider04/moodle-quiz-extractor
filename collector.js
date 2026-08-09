@@ -53,6 +53,7 @@ function stripHtml(html) {
     .replace(/&#8216;|&lsquo;/gi, '\u2018')
     .replace(/&#8217;|&rsquo;/gi, '\u2019')
     .replace(/&#183;|&middot;/gi, '\u00B7')
+    .replace(/&#x2192;|&#8594;|&rarr;/gi, '\u2192') // rightwards arrow →
     .replace(new RegExp(NL + '+', 'g'), NL)  // one break per structural element
     .replace(new RegExp(NL + ' +', 'g'), NL) // strip spaces right after a break
     .replace(new RegExp(' +' + NL, 'g'), NL) // strip spaces right before a break
