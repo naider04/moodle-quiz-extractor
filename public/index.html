@@ -53,6 +53,9 @@
 </div>
 
 <script>
+// Image position marker (text → break → image → break → text, like Moodle).
+const IMG_T = '\u0002';
+const IMG_TOKEN_RE = new RegExp(IMG_T + '([^' + IMG_T + ']+)' + IMG_T, 'g');
 const $loginScreen = document.getElementById('login-screen');
 const $progressScreen = document.getElementById('progress-screen');
 const $loginForm = document.getElementById('login-form');
@@ -192,6 +195,28 @@ function toggleAll(btn) {
   updateFloat();
 }
 
+// Appends plain text and <img> elements to container. \u0002url\u0002 markers
+// become images (feedback text uses this; question text uses innerHTML because
+// it already contains intentional ddwtos-answer markup).
+function appendRichText(container, text, imgMap, imgClass, alt) {
+  const parts = String(text || '').split(IMG_T);
+  for (let i = 0; i < parts.length; i++) {
+    if (i % 2 === 1) {
+      const url = parts[i];
+      if (!url) continue;
+      const local = imgMap ? imgMap.get(url) : null;
+      const el = document.createElement('img');
+      el.className = imgClass;
+      el.alt = alt;
+      el.loading = 'lazy';
+      el.src = local ? `/resources/${encodeURIComponent(local)}` : url;
+      container.appendChild(el);
+    } else if (parts[i]) {
+      container.appendChild(document.createTextNode(parts[i]));
+    }
+  }
+}
+
 function renderQuestion(q) {
   const div = document.createElement('div');
   div.className = 'q';
@@ -225,10 +250,24 @@ function renderQuestion(q) {
       processedText = processedText.replace(placeholderRegex, `$1${sub.selectedText || ''}$2`);
     });
   }
+  // Images embedded in the question text keep their position in the flow
+  // (text → break → image → break → text, just like Moodle).
+  const imgMap = new Map((q.images || []).map((i) => [i.url, i.localFile]));
+  const renderedInText = new Set();
+  processedText = processedText.replace(IMG_TOKEN_RE, (m, url) => {
+    renderedInText.add(url);
+    const local = imgMap.get(url);
+    const src = local ? `/resources/${encodeURIComponent(local)}` : url;
+    return `<img class="q-img" alt="question image" loading="lazy" src="${src.replace(/"/g, '&quot;')}">`;
+  });
   text.innerHTML = processedText;
   div.appendChild(text);
 
-  for (const img of q.images) {
+  // Fallback: images not embedded in the text (e.g. multianswer) and not part
+  // of the feedback are appended after the question.
+  const feedbackImgUrls = new Set((q.feedbackImages || []).map((i) => i.url));
+  for (const img of q.images || []) {
+    if (renderedInText.has(img.url) || feedbackImgUrls.has(img.url)) continue;
     const el = document.createElement('img');
     el.className = 'q-img';
     el.alt = 'question image';
@@ -336,7 +375,7 @@ function renderQuestion(q) {
   if (q.feedback) {
     const fb = document.createElement('div');
     fb.className = 'feedback';
-    fb.textContent = q.feedback;
+    appendRichText(fb, q.feedback, new Map((q.feedbackImages || []).map((i) => [i.url, i.localFile])), 'q-img', 'feedback image');
     div.appendChild(fb);
   }
 

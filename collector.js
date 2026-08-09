@@ -3,6 +3,20 @@ const fs = require('fs');
 const path = require('path');
 
 // ─── Small text helpers ──────────────────────────────────────────────
+// Images inside question/feedback text become this marker so their position in
+// the text flow survives stripHtml (text → break → image → break → text, just
+// like Moodle). The renderers swap it back for an <img> tag.
+const IMG_T = '\u0002';
+function imgToTokens(htmlStr) {
+  return String(htmlStr || '').replace(/<img[^>]*src="([^"]+)"[^>]*>/gi, (m, src) => {
+    const url = src.replace(/&amp;/g, '&').trim();
+    return url ? IMG_T + url + IMG_T : '';
+  });
+}
+function imgTokenRe() {
+  return new RegExp(IMG_T + '([^' + IMG_T + ']+)' + IMG_T, 'g');
+}
+
 function stripHtml(html) {
   if (!html) return '';
   let li = 0;
@@ -30,6 +44,15 @@ function stripHtml(html) {
     .replace(/&quot;/gi, '"')
     .replace(/&#0?39;/gi, "'")
     .replace(/&#x27;/gi, "'")
+    .replace(/&#x2011;/gi, '-') // non-breaking hyphen → plain hyphen
+    .replace(/&#8211;|&ndash;/gi, '\u2013')
+    .replace(/&#8212;|&mdash;/gi, '\u2014')
+    .replace(/&#8230;|&hellip;/gi, '\u2026')
+    .replace(/&#8220;|&ldquo;/gi, '\u201C')
+    .replace(/&#8221;|&rdquo;/gi, '\u201D')
+    .replace(/&#8216;|&lsquo;/gi, '\u2018')
+    .replace(/&#8217;|&rsquo;/gi, '\u2019')
+    .replace(/&#183;|&middot;/gi, '\u00B7')
     .replace(new RegExp(NL + '+', 'g'), NL)  // one break per structural element
     .replace(new RegExp(NL + ' +', 'g'), NL) // strip spaces right after a break
     .replace(new RegExp(' +' + NL, 'g'), NL) // strip spaces right before a break
@@ -371,7 +394,7 @@ function parseQuestion(q) {
     const qtextMatch = html.match(
       /<div class="qtext"[^>]*>([\s\S]*?)<\/div>\s*(?:<\/div>|<fieldset|<div class="(?:ablock|answer))/i,
     );
-    const qtextHtml = qtextMatch ? qtextMatch[1] : '';
+    const qtextHtml = qtextMatch ? imgToTokens(qtextMatch[1]) : '';
     questionText = qtextMatch ? stripHtml(qtextHtml).trim() : '';
 
     // Find draggable items (choices)
@@ -525,10 +548,10 @@ function parseQuestion(q) {
     const qtextMatch = html.match(
       /<div class="qtext"[^>]*>([\s\S]*?)<\/div>\s*(?:<\/div>|<fieldset|<div class="(?:ablock|answer))/i,
     );
-    questionText = qtextMatch ? stripHtml(qtextMatch[1]).trim() : '';
+    questionText = qtextMatch ? stripHtml(imgToTokens(qtextMatch[1])).trim() : '';
     if (!questionText) {
       const alt = html.match(/<div class="qtext"[^>]*>([\s\S]*?)<\/div>/i);
-      if (alt) questionText = stripHtml(alt[1]).trim();
+      if (alt) questionText = stripHtml(imgToTokens(alt[1])).trim();
     }
 
     // Selected answer
@@ -616,11 +639,19 @@ function parseQuestion(q) {
   // Essays use manual grading — a score of 0 doesn't mean "wrong", it may be ungraded
   const isWrong = !isEssay && markObtained === 0 && markMax > 0;
 
-  // Feedback ("La respuesta correcta es: ...")
+  // Feedback ("La respuesta correcta es: ...") — images keep their position
+  // in the text flow and are collected separately for downloading.
   let feedback = '';
+  let feedbackImages = [];
   const feedbackMatch = html.match(/<div class="rightanswer">([\s\S]*?)<\/div>/i);
   if (feedbackMatch) {
-    feedback = stripHtml(feedbackMatch[1]).trim();
+    feedback = stripHtml(imgToTokens(feedbackMatch[1])).trim();
+    const fbImgRe = /<img[^>]*src="([^"]+)"[^>]*>/gi;
+    let fim;
+    while ((fim = fbImgRe.exec(feedbackMatch[1])) !== null) {
+      const s = fim[1].replace(/&amp;/g, '&');
+      if (s.includes('pluginfile.php') && !feedbackImages.includes(s)) feedbackImages.push(s);
+    }
   }
 
   // Essay response — what the student wrote
@@ -692,6 +723,7 @@ function parseQuestion(q) {
     isWrong,
     images,
     audios,
+    feedbackImages,
     essayResponse,
     feedback,
   };
@@ -846,6 +878,12 @@ async function collect(baseUrl, token, userId, outDir, onMessage) {
                 localFile: await downloadMedia(src, 'image'),
               })),
             );
+            parsed.feedbackImages = await Promise.all(
+              (parsed.feedbackImages || []).map(async (src) => ({
+                url: src,
+                localFile: await downloadMedia(src, 'image'),
+              })),
+            );
             parsed.audios = await Promise.all(
               (parsed.audios || []).map(async (src) => ({
                 url: src,
@@ -945,16 +983,20 @@ function escapeHtml(str) {
     .replace(/"/g, '&quot;');
 }
 
-// Escape everything except our <span class="ddwtos-answer">…</span> boxes,
-// which are intentionally kept as markup so they render as boxes.
+// Escape everything except our <span class="ddwtos-answer">…</span> boxes and
+// <img …> tags, which are intentionally kept as markup so they render.
 function escapeHtmlKeepAnswerBoxes(str) {
-  const re = /<span class="ddwtos-answer">([\s\S]*?)<\/span>/g;
+  const re = /<span class="ddwtos-answer">([\s\S]*?)<\/span>|<img[^>]*>/g;
   let out = '';
   let last = 0;
   let m;
   while ((m = re.exec(String(str || ''))) !== null) {
     out += escapeHtml(String(str).slice(last, m.index));
-    out += `<span class="ddwtos-answer">${escapeHtml(m[1])}</span>`;
+    if (m[0].startsWith('<img')) {
+      out += m[0];
+    } else {
+      out += `<span class="ddwtos-answer">${escapeHtml(m[1])}</span>`;
+    }
     last = m.index + m[0].length;
   }
   out += escapeHtml(String(str).slice(last));
@@ -1170,9 +1212,22 @@ function buildStaticGuide(servers) {
               // ddwtos answers are only tinted green when the whole question
               // earned max grade — otherwise we can't tell which gaps were right.
               const ddwtosCls = (q.type === 'ddwtos' || q.type === 'gapselect') && q.isCorrect ? ' ddwtos-ok' : '';
-              html.push(`<div class="q-text${ddwtosCls}">${escapeHtmlKeepAnswerBoxes(q.questionText)}</div>`);
+              // Images embedded in the question text keep their position in the
+              // flow (text → break → image → break → text, just like Moodle).
+              const imgMap = new Map((q.images || []).map((i) => [i.url, i.localFile]));
+              const renderedInText = new Set();
+              const qtextHtml = (q.questionText || '').replace(imgTokenRe(), (m, url) => {
+                renderedInText.add(url);
+                const src = imgMap.get(url) ? `resources/${imgMap.get(url)}` : url;
+                return `<img class="q-img" alt="question image" loading="lazy" src="${escapeHtml(src)}">`;
+              });
+              html.push(`<div class="q-text${ddwtosCls}">${escapeHtmlKeepAnswerBoxes(qtextHtml)}</div>`);
 
+          // Fallback: images not embedded in the text (e.g. multianswer) and not
+          // part of the feedback are appended after the question.
+          const feedbackImgUrls = new Set((q.feedbackImages || []).map((i) => i.url));
           for (const img of q.images || []) {
+            if (renderedInText.has(img.url) || feedbackImgUrls.has(img.url)) continue;
             const src = img.localFile ? `resources/${img.localFile}` : img.url;
             html.push(`<img class="q-img" alt="question image" loading="lazy" src="${escapeHtml(src)}">`);
           }
@@ -1233,7 +1288,12 @@ function buildStaticGuide(servers) {
             html.push(`<div class="essay-response">${escapeHtml(q.essayResponse)}</div>`);
           }
           if (q.feedback) {
-            html.push(`<div class="feedback">${escapeHtml(q.feedback)}</div>`);
+            const fbImgMap = new Map((q.feedbackImages || []).map((i) => [i.url, i.localFile]));
+            const fbHtml = q.feedback.replace(imgTokenRe(), (m, url) => {
+              const src = fbImgMap.get(url) ? `resources/${fbImgMap.get(url)}` : url;
+              return `<img class="q-img" alt="feedback image" loading="lazy" src="${escapeHtml(src)}">`;
+            });
+            html.push(`<div class="feedback">${escapeHtmlKeepAnswerBoxes(fbHtml)}</div>`);
           }
               html.push('</div>');
             }
