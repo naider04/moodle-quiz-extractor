@@ -11,5 +11,8 @@ output/
 # Local test artifacts
 local-output_files/
 
+# Firebase service-account credentials (never commit these)
+firebase-service-account.json
+
 # Dev scripts not part of the web app
 scripts/

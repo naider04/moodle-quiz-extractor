@@ -972,6 +972,18 @@ async function collect(baseUrl, token, userId, outDir, onMessage) {
   fs.writeFileSync(guideFile, buildStaticGuide(servers), 'utf8');
   log(`Guía  → ${guideFile}`);
 
+  // Persist the unique-question bank to Firebase when credentials exist.
+  try {
+    const fb = require('./firebase_sync');
+    if (fb.isConfigured()) {
+      log('\nSubiendo preguntas únicas a Firebase…');
+      const r = await fb.syncServers(servers, log);
+      log(`Firebase → ${r.courses} curso(s), ${r.quizzes} quiz(es), ${r.questions} preguntas únicas`);
+    }
+  } catch (e) {
+    log(`⚠ Firebase: ${e.message}`);
+  }
+
   return { questionCount, correctCount, mediaCount: mediaTotal };
 }
 
@@ -1033,6 +1045,7 @@ function buildStaticGuide(servers) {
   .q-num.correct{color:#69f0ae}
   .q-num.wrong{color:#ff5252}
   .q-num.partial{color:#ffd740}
+  .q-num.bank{color:#9ccc65}
   .q-type{color:#666;font-size:.75em;margin-bottom:3px}
   .q-text{color:#e0e0e0;margin-bottom:8px;font-size:.95em;white-space:pre-wrap;overflow-wrap:break-word}
   .q-img{max-width:100%;border-radius:8px;margin:8px 0;border:1px solid #333}
@@ -1201,12 +1214,14 @@ function buildStaticGuide(servers) {
               html.push(`<div class="attempt-hdr">Intento ${attempt.attemptNumber} — ${attScore}</div>`);
             }
             for (const q of attempt.questions) {
-              const numCls = q.isCorrect ? 'correct' : q.isWrong ? 'wrong' : 'partial';
-              const numText = q.isCorrect
-                ? `P${q.questionNumber} — ✓ Correcta`
-                : q.isWrong
-                  ? `P${q.questionNumber} — ✗ Incorrecta`
-                  : `P${q.questionNumber} — ${q.markObtained}/${q.markMax}`;
+              const numCls = q.isCorrect ? 'correct' : q.isWrong ? 'wrong' : q.questionBank ? 'bank' : 'partial';
+              const numText = q.questionBank
+                ? `P${q.questionNumber}`
+                : q.isCorrect
+                  ? `P${q.questionNumber} — ✓ Correcta`
+                  : q.isWrong
+                    ? `P${q.questionNumber} — ✗ Incorrecta`
+                    : `P${q.questionNumber} — ${q.markObtained}/${q.markMax}`;
               html.push('<div class="q">');
               html.push(`<div class="q-num ${numCls}">${escapeHtml(numText)}</div>`);
               html.push(`<div class="q-type">${escapeHtml(q.type)}</div>`);
