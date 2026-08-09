@@ -16,3 +16,6 @@ firebase-service-account.json
 
 # Dev scripts not part of the web app
 scripts/
+
+# Firebase CLI junk
+nohup.out
