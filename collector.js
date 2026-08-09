@@ -576,9 +576,12 @@ function parseQuestion(q) {
     }
   }
 
-  // Grade
-  const markObtained = parseFloat(String(q.mark || '0').replace(',', '.'));
-  const markMax = q.maxmark || 0;
+  // Grade — Moodle returns the mark already rounded to 2 decimals (e.g.
+  // "1,88") while maxmark is raw (e.g. 1.875). Round both the way Moodle
+  // displays them, otherwise a fully-correct question reads as partial.
+  const round2 = (n) => Math.round((Number(n) + Number.EPSILON) * 100) / 100;
+  const markObtained = round2(parseFloat(String(q.mark || '0').replace(',', '.')));
+  const markMax = round2(q.maxmark || 0);
   const isEssay = (q.type || '') === 'essay';
   const isCorrect = markObtained === markMax && markMax > 0;
   // Essays use manual grading — a score of 0 doesn't mean "wrong", it may be ungraded
