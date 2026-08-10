@@ -114,8 +114,11 @@ function canonicalize(q) {
     text: o.text,
     optionImages: (o.optionImages || []).map((m) => ({ url: m.url, localFile: m.localFile || '' })),
     selected: false,
+    // markedCorrect is the static right answer (merged across instances in
+    // buildUniqueQuestions); markedIncorrect is the STUDENT's wrong pick in
+    // one attempt, so it must not survive into the bank.
     markedCorrect: !!o.markedCorrect,
-    markedIncorrect: !!o.markedIncorrect,
+    markedIncorrect: false,
     index: o.index,
   });
   const sub = (s) => ({
@@ -147,10 +150,38 @@ function canonicalize(q) {
   };
 }
 
+// Merge the correct-answer marks from every instance into the canonical bank
+// question. Moodle only reveals the right answer in reviews of attempts where
+// it was answered correctly, so the first-seen (possibly wrong) instance can
+// be missing marks. Options are matched by content because Moodle shuffles
+// their order per attempt.
+function mergeCorrectMarks(canonical, instances) {
+  const optKey = (o) => String(o.text || '').trim() + '|' + (o.optionImages || []).map((i) => i.url).join('+');
+  const merge = (canonOpts, instOpts) => {
+    if (!Array.isArray(instOpts) || !instOpts.length) return;
+    const map = new Map((canonOpts || []).map((o) => [optKey(o), o]));
+    for (const o of instOpts) {
+      if (!o.markedCorrect) continue;
+      const co = map.get(optKey(o));
+      if (co) co.markedCorrect = true;
+    }
+  };
+  merge(canonical.options, instances.map((i) => i.options).flat());
+  // Sub-questions: match by stem text (match rows can be shuffled per attempt).
+  for (const csub of canonical.subQuestions || []) {
+    for (const inst of instances) {
+      const isub = (inst.subQuestions || []).find(
+        (s) => String(s.questionText) === String(csub.questionText),
+      );
+      if (isub) merge(csub.options || [], isub.options || []);
+    }
+  }
+}
+
 // Dedupe all questions across every attempt of one quiz. Returns the bank
 // array (renumbered 1..N) with per-question aggregate stats attached.
 function buildUniqueQuestions(attemptsData) {
-  const seen = new Map(); // key → { canonical, stats }
+  const seen = new Map(); // key → { canonical, instances, stats }
   for (const att of attemptsData || []) {
     for (const q of att.questions || []) {
       const key = uniqueKey(q);
@@ -158,10 +189,12 @@ function buildUniqueQuestions(attemptsData) {
       if (!entry) {
         entry = {
           canonical: canonicalize(q),
+          instances: [],
           stats: { seenInAttempts: 0, timesCorrect: 0, timesWrong: 0, timesPartial: 0, totalMarkPct: 0 },
         };
         seen.set(key, entry);
       }
+      entry.instances.push(q);
       entry.stats.seenInAttempts++;
       if (q.isCorrect) entry.stats.timesCorrect++;
       else if (q.isWrong) entry.stats.timesWrong++;
@@ -170,6 +203,7 @@ function buildUniqueQuestions(attemptsData) {
     }
   }
   const list = [...seen.values()].map((e, i) => {
+    mergeCorrectMarks(e.canonical, e.instances);
     const s = e.stats;
     e.canonical.questionNumber = i + 1;
     e.canonical.stats = {
