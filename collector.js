@@ -1115,6 +1115,8 @@ function buildStaticGuide(servers, opts = {}) {
       updateFloat();
     }
     function updateFloat(){
+      const box=document.getElementById('float-box');
+      if(!box) return;
       const mid=window.innerHeight/2;
       let hit=null;
       const bodies=document.querySelectorAll('.quiz-body');
@@ -1135,7 +1137,6 @@ function buildStaticGuide(servers, opts = {}) {
       }
       if(hit) __lastFloat=hit;
       const cur=hit||__lastFloat;
-      const box=document.getElementById('float-box');
       const name=document.getElementById('float-quiz-name');
       const link=document.getElementById('float-attempt-link');
       if(!cur){ box.classList.add('hidden'); return; }
@@ -1159,7 +1160,7 @@ function buildStaticGuide(servers, opts = {}) {
     window.addEventListener('resize',updateFloat);
     window.addEventListener('load',updateFloat);
   </script></head><body>`);
-  html.push('<div id="float-box" class="hidden"><div class="float-label">Viendo</div><div id="float-quiz-name"></div><a id="float-attempt-link" target="_blank" rel="noopener">Abrir intento</a></div>');
+  if (!bank) html.push('<div id="float-box" class="hidden"><div class="float-label">Viendo</div><div id="float-quiz-name"></div><a id="float-attempt-link" target="_blank" rel="noopener">Abrir intento</a></div>');
   html.push(`<h1>${bank ? '📚 Banco de Preguntas Únicas' : '📚 Moodle Quiz Study Guide'}</h1>`);
   html.push('<div class="legend">');
   html.push('<span><span class="dot g"></span> Correcta</span>');
