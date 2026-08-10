@@ -1016,7 +1016,8 @@ function escapeHtmlKeepAnswerBoxes(str) {
   return out;
 }
 
-function buildStaticGuide(servers) {
+function buildStaticGuide(servers, opts = {}) {
+  const bank = !!opts.bank; // bank mode: render a quiz's UNIQUE questions
   const css = `
   *{box-sizing:border-box;margin:0;padding:0}
   body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:#0f0f0f;color:#e0e0e0;padding:20px;line-height:1.6}
@@ -1045,6 +1046,7 @@ function buildStaticGuide(servers) {
   .q-num.correct{color:#69f0ae}
   .q-num.wrong{color:#ff5252}
   .q-num.partial{color:#ffd740}
+  .q-num.bank{color:#9ccc65}
   .q-type{color:#666;font-size:.75em;margin-bottom:3px}
   .q-text{color:#e0e0e0;margin-bottom:8px;font-size:.95em;white-space:pre-wrap;overflow-wrap:break-word}
   .q-img{max-width:100%;border-radius:8px;margin:8px 0;border:1px solid #333}
@@ -1139,7 +1141,11 @@ function buildStaticGuide(servers) {
       if(!cur){ box.classList.add('hidden'); return; }
       box.classList.remove('hidden');
       name.textContent=cur.entry.attempts.length>1?cur.entry.name+' — Intento '+cur.attempt.n:cur.entry.name;
-      if(cur.entry.cmid && cur.attempt.id!=null){
+      if(cur.entry.bank && cur.entry.cmid){
+        link.href=cur.entry.base+'/mod/quiz/view.php?id='+cur.entry.cmid;
+        link.textContent='Abrir quiz en Moodle';
+        link.classList.remove('disabled');
+      }else if(cur.entry.cmid && cur.attempt.id!=null){
         link.href=cur.entry.base+'/mod/quiz/review.php?attempt='+cur.attempt.id+'&cmid='+cur.entry.cmid;
         link.textContent='Abrir intento '+cur.attempt.n;
         link.classList.remove('disabled');
@@ -1154,7 +1160,7 @@ function buildStaticGuide(servers) {
     window.addEventListener('load',updateFloat);
   </script></head><body>`);
   html.push('<div id="float-box" class="hidden"><div class="float-label">Viendo</div><div id="float-quiz-name"></div><a id="float-attempt-link" target="_blank" rel="noopener">Abrir intento</a></div>');
-  html.push('<h1>📚 Moodle Quiz Study Guide</h1>');
+  html.push(`<h1>${bank ? '📚 Banco de Preguntas Únicas' : '📚 Moodle Quiz Study Guide'}</h1>`);
   html.push('<div class="legend">');
   html.push('<span><span class="dot g"></span> Correcta</span>');
   html.push('<span><span class="dot r"></span> Incorrecta (tu respuesta)</span>');
@@ -1171,7 +1177,9 @@ function buildStaticGuide(servers) {
       html.push('<div class="course-blk">');
       html.push('<div class="course-title" onclick="this.nextElementSibling.classList.toggle(\'open\')">');
       html.push(`<span>${escapeHtml(course.name)}</span>`);
-      html.push(`<span class="stats">${course.quizzes.length} quizzes · ${correctQ}/${totalQ} correctas</span>`);
+      html.push(`<span class="stats">${bank
+        ? `${course.quizzes.length} quizzes · ${totalQ} preguntas únicas`
+        : `${course.quizzes.length} quizzes · ${correctQ}/${totalQ} correctas`}</span>`);
       html.push('</div>');
       html.push('<div class="course-quizzes">');
 
@@ -1185,10 +1193,14 @@ function buildStaticGuide(servers) {
           ? ` <a class="quiz-link" href="${escapeHtml(server.baseUrl)}/mod/quiz/view.php?id=${quiz.cmid}" target="_blank" rel="noopener" title="Abrir en Moodle" onclick="event.stopPropagation()">${escapeHtml('↗')}</a>`
           : '';
         html.push(`<span class="name">${escapeHtml(quiz.name)}${quizLink}</span>`);
-        html.push(`<div class="info">${quiz.attempts} intento(s) · ${quizCorrect}/${quizTotal} correctas</div>`);
+        html.push(`<div class="info">${bank
+          ? `${quiz.attempts} intentos · ${quizTotal} preguntas únicas`
+          : `${quiz.attempts} intento(s) · ${quizCorrect}/${quizTotal} correctas`}</div>`);
         html.push('</div>');
-        const color = quiz.bestGrade >= quiz.sumGrades ? '#69f0ae' : quiz.bestGrade > 0 ? '#ffd740' : '#ff5252';
-        html.push(`<span class="score" style="color:${color}">${quiz.bestGrade != null ? quiz.bestGrade + '/' + quiz.sumGrades : '?'}</span>`);
+        if (!bank) {
+          const color = quiz.bestGrade >= quiz.sumGrades ? '#69f0ae' : quiz.bestGrade > 0 ? '#ffd740' : '#ff5252';
+          html.push(`<span class="score" style="color:${color}">${quiz.bestGrade != null ? quiz.bestGrade + '/' + quiz.sumGrades : '?'}</span>`);
+        }
         html.push('</div>');
 
         // All finished attempts, or a single synthetic attempt for old data.
@@ -1200,6 +1212,7 @@ function buildStaticGuide(servers) {
           name: quiz.name,
           cmid: quiz.cmid || null,
           base: server.baseUrl,
+          bank: bank,
           attempts: attemptsData.map((a) => ({ n: a.attemptNumber, id: a.attemptId != null ? a.attemptId : null })),
         });
         html.push(`<div class="quiz-body" data-reg="${reg.length - 1}">`);
@@ -1213,12 +1226,14 @@ function buildStaticGuide(servers) {
               html.push(`<div class="attempt-hdr">Intento ${attempt.attemptNumber} — ${attScore}</div>`);
             }
             for (const q of attempt.questions) {
-              const numCls = q.isCorrect ? 'correct' : q.isWrong ? 'wrong' : 'partial';
-              const numText = q.isCorrect
-                ? `P${q.questionNumber} — ✓ Correcta`
-                : q.isWrong
-                  ? `P${q.questionNumber} — ✗ Incorrecta`
-                  : `P${q.questionNumber} — ${q.markObtained}/${q.markMax}`;
+              const numCls = q.isCorrect ? 'correct' : q.isWrong ? 'wrong' : q.questionBank ? 'bank' : 'partial';
+              const numText = q.questionBank
+                ? `P${q.questionNumber}`
+                : q.isCorrect
+                  ? `P${q.questionNumber} — ✓ Correcta`
+                  : q.isWrong
+                    ? `P${q.questionNumber} — ✗ Incorrecta`
+                    : `P${q.questionNumber} — ${q.markObtained}/${q.markMax}`;
               html.push('<div class="q">');
               html.push(`<div class="q-num ${numCls}">${escapeHtml(numText)}</div>`);
               html.push(`<div class="q-type">${escapeHtml(q.type)}</div>`);
