@@ -21,7 +21,13 @@ app.post('/api/login', async (req, res) => {
     return res.status(400).json({ error: 'URL, username, and password are required.' });
   }
   try {
-    const baseUrl = moodleUrl.replace(/\/+$/, '');
+    // Accept "aulagradob.unemi.edu.ec" without a scheme: prepend https://
+    // (or keep an explicit http://).
+    let baseUrl = String(moodleUrl || '').trim().replace(/\/+$/, '');
+    if (baseUrl && !/^https?:\/\//i.test(baseUrl)) baseUrl = 'https://' + baseUrl;
+    if (!baseUrl) {
+      return res.status(400).json({ error: 'URL, username, and password are required.' });
+    }
     const tokenRes = await fetch(
       `${baseUrl}/login/token.php?username=${encodeURIComponent(username)}&password=${encodeURIComponent(password)}&service=moodle_mobile_app`,
     );
