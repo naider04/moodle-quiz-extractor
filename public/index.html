@@ -52,6 +52,26 @@
   </div>
 </div>
 
+<!-- ─── Simulador: práctica con el banco de preguntas (Firestore) ─── -->
+<div id="simulator" class="hidden">
+  <div class="sim-wrap">
+    <div class="sim-header">
+      <div class="sim-titles">
+        <div class="sim-title" id="sim-title"></div>
+        <div class="sim-sub" id="sim-sub"></div>
+      </div>
+      <div class="sim-score" id="sim-score"></div>
+      <button id="sim-close" class="sim-btn ghost" type="button" title="Cerrar simulador">✕</button>
+    </div>
+    <div id="sim-body"></div>
+    <div class="sim-nav">
+      <button id="sim-prev" class="sim-btn" type="button">← Anterior</button>
+      <button id="sim-check" class="sim-btn primary" type="button">Comprobar</button>
+      <button id="sim-next" class="sim-btn" type="button">Siguiente →</button>
+    </div>
+  </div>
+</div>
+
 <script>
 // Image position marker (text → break → image → break → text, like Moodle).
 const IMG_T = '\u0002';
@@ -466,10 +486,19 @@ function renderGuide(allData) {
       courseTitle.className = 'course-title';
       const nameSpan = document.createElement('span');
       nameSpan.textContent = course.name;
+      const simBtn = document.createElement('button');
+      simBtn.type = 'button';
+      simBtn.className = 'sim-start';
+      simBtn.textContent = '▶ Iniciar Simulador';
+      simBtn.title = 'Practicar con el banco de preguntas únicas de esta materia';
+      simBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        startSimulator(server.baseUrl, course);
+      });
       const statsSpan = document.createElement('span');
       statsSpan.className = 'stats';
       statsSpan.textContent = `${course.quizzes.length} quizzes · ${correctQ}/${totalQ} correctas`;
-      courseTitle.append(nameSpan, statsSpan);
+      courseTitle.append(nameSpan, simBtn, statsSpan);
 
       const courseQuizzes = document.createElement('div');
       courseQuizzes.className = 'course-quizzes';
@@ -549,6 +578,505 @@ function renderGuide(allData) {
     }
   }
   updateFloat();
+}
+
+// ─── Simulador: práctica con el banco de preguntas únicas (Firestore) ──
+const $simulator = document.getElementById('simulator');
+const $simTitle = document.getElementById('sim-title');
+const $simSub = document.getElementById('sim-sub');
+const $simScore = document.getElementById('sim-score');
+const $simBody = document.getElementById('sim-body');
+const $simPrev = document.getElementById('sim-prev');
+const $simNext = document.getElementById('sim-next');
+const $simCheck = document.getElementById('sim-check');
+const $simClose = document.getElementById('sim-close');
+
+let simState = null; // { questions, index, answers }
+let simCoursesCache = null;
+
+async function startSimulator(baseUrl, course) {
+  try {
+    if (!simCoursesCache) {
+      const res = await fetch('/api/simulator/courses');
+      if (!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
+      simCoursesCache = await res.json();
+    }
+    const entry = simCoursesCache.find(
+      (c) => c.baseUrl === baseUrl && String(c.courseId) === String(course.courseId),
+    );
+    if (!entry) {
+      alert('Aún no hay banco de preguntas subido para esta materia.');
+      return;
+    }
+    const res = await fetch('/api/simulator/course?course=' + encodeURIComponent(entry.courseKey));
+    if (!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data.questions.length) throw new Error('El banco de esta materia no tiene preguntas.');
+
+    simState = {
+      questions: data.questions,
+      index: 0,
+      answers: data.questions.map(() => ({ picked: [], checked: false, markObtained: 0, markMax: 0 })),
+    };
+    $simTitle.textContent = data.name;
+    $simSub.textContent = `${data.questionCount} preguntas únicas · ${data.quizzes.length} quizzes`;
+    $simulator.classList.remove('hidden');
+    renderSimQuestion();
+  } catch (err) {
+    alert('No se pudo iniciar el simulador: ' + err.message);
+  }
+}
+
+$simClose.addEventListener('click', () => {
+  $simulator.classList.add('hidden');
+  simState = null;
+});
+
+$simPrev.addEventListener('click', () => {
+  if (simState && simState.index > 0) {
+    simState.index--;
+    renderSimQuestion();
+  }
+});
+
+$simNext.addEventListener('click', () => {
+  if (simState && simState.index < simState.questions.length - 1) {
+    simState.index++;
+    renderSimQuestion();
+  }
+});
+
+$simCheck.addEventListener('click', () => {
+  if (!simState) return;
+  const a = simState.answers[simState.index];
+  if (a.checked) return;
+  buildAttempt(simState.questions[simState.index], a); // computes marks
+  a.checked = true;
+  renderSimQuestion();
+});
+
+function simScoreText() {
+  let got = 0;
+  let max = 0;
+  for (const a of simState.answers) {
+    if (a.markMax > 0) {
+      got += a.markObtained || 0;
+      max += a.markMax;
+    }
+  }
+  return `Puntos: ${Math.round(got * 100) / 100} / ${max}`;
+}
+
+function renderSimQuestion() {
+  const q = simState.questions[simState.index];
+  const a = simState.answers[simState.index];
+  $simBody.innerHTML = '';
+  $simScore.textContent = simScoreText();
+
+  const meta = document.createElement('div');
+  meta.className = 'sim-meta';
+  meta.textContent = `Pregunta ${simState.index + 1} de ${simState.questions.length}`;
+  if (q.sourceQuiz) meta.textContent += ` · Quiz: ${q.sourceQuiz}`;
+  $simBody.appendChild(meta);
+
+  if (a.checked) {
+    $simBody.appendChild(renderQuestion(buildAttempt(q, a)));
+    $simCheck.disabled = true;
+    $simCheck.textContent = '✓ Comprobada';
+  } else {
+    $simBody.appendChild(renderSimAnswer(q, a));
+    $simCheck.disabled = false;
+    $simCheck.textContent = 'Comprobar';
+  }
+  $simPrev.disabled = simState.index === 0;
+  $simNext.disabled = simState.index === simState.questions.length - 1;
+
+  if (simState.answers.every((x) => x.checked)) {
+    $simBody.appendChild(simSummary());
+  }
+}
+
+// Flow markers inside ddwtos/gapselect question text: image tokens or gap spans.
+const simFlowRe = new RegExp('(' + IMG_T + '[^' + IMG_T + ']+' + IMG_T + ')|(<span class="ddwtos-answer">…</span>)', 'g');
+const simImgPartRe = new RegExp('^' + IMG_T + '([^' + IMG_T + ']+)' + IMG_T + '$');
+const simGapPartRe = /^<span class="ddwtos-answer">…<\/span>$/;
+
+function makeGapSelect(q, a, gapIndex) {
+  const opts = q.options || [];
+  if (!opts.length) {
+    const span = document.createElement('span');
+    span.className = 'ddwtos-answer';
+    span.textContent = '…';
+    return span;
+  }
+  const sel = document.createElement('select');
+  sel.className = 'sim-gap';
+  const blank = document.createElement('option');
+  blank.value = '';
+  blank.textContent = '— elegir —';
+  sel.appendChild(blank);
+  opts.forEach((o, oi) => {
+    const optEl = document.createElement('option');
+    optEl.value = String(oi);
+    optEl.textContent = o.text;
+    sel.appendChild(optEl);
+  });
+  sel.value = a.picked[gapIndex] != null ? String(a.picked[gapIndex]) : '';
+  sel.addEventListener('change', () => {
+    a.picked[gapIndex] = sel.value === '' ? null : parseInt(sel.value, 10);
+  });
+  return sel;
+}
+
+// Answer phase: interactive controls, one per question type.
+function renderSimAnswer(q, a) {
+  const div = document.createElement('div');
+
+  const num = document.createElement('div');
+  num.className = 'q-num bank';
+  num.textContent = `P${q.questionNumber}`;
+  div.appendChild(num);
+
+  const type = document.createElement('div');
+  type.className = 'q-type';
+  type.textContent = q.type;
+  div.appendChild(type);
+
+  const text = document.createElement('div');
+  text.className = 'q-text';
+  const imgMap = new Map((q.images || []).map((i) => [i.url, i.localFile]));
+  const isGapType = q.type === 'ddwtos' || q.type === 'gapselect';
+
+  if (isGapType) {
+    // Flow: text / image / gap-select in the original order.
+    const parts = String(q.questionText || '').split(simFlowRe);
+    let gapIndex = 0;
+    for (const part of parts) {
+      if (!part) continue;
+      const imgM = part.match(simImgPartRe);
+      const gapM = part.match(simGapPartRe);
+      if (imgM) {
+        const local = imgMap.get(imgM[1]);
+        const imgEl = document.createElement('img');
+        imgEl.className = 'q-img';
+        imgEl.alt = 'question image';
+        imgEl.loading = 'lazy';
+        imgEl.src = local ? `/resources/${encodeURIComponent(local)}` : imgM[1];
+        text.appendChild(imgEl);
+      } else if (gapM) {
+        text.appendChild(makeGapSelect(q, a, gapIndex));
+        gapIndex++;
+      } else {
+        text.appendChild(document.createTextNode(part));
+      }
+    }
+    const hint = document.createElement('div');
+    hint.className = 'sim-hint';
+    hint.textContent = 'Elige una opción para cada espacio.';
+    div.appendChild(hint);
+    const choices = document.createElement('div');
+    choices.className = 'sim-choices';
+    for (const o of q.options || []) {
+      const chip = document.createElement('span');
+      chip.className = 'sim-chip';
+      chip.textContent = o.text;
+      choices.appendChild(chip);
+    }
+    div.appendChild(choices);
+  } else {
+    const renderedInText = new Set();
+    let processedText = String(q.questionText || '').replace(IMG_TOKEN_RE, (m, url) => {
+      renderedInText.add(url);
+      const local = imgMap.get(url);
+      const src = local ? `/resources/${encodeURIComponent(local)}` : url;
+      return `<img class="q-img" alt="question image" loading="lazy" src="${src.replace(/"/g, '&quot;')}">`;
+    });
+    text.innerHTML = processedText;
+    for (const img of q.images || []) {
+      if (renderedInText.has(img.url)) continue;
+      const imgEl = document.createElement('img');
+      imgEl.className = 'q-img';
+      imgEl.alt = 'question image';
+      imgEl.loading = 'lazy';
+      imgEl.src = img.localFile ? `/resources/${encodeURIComponent(img.localFile)}` : img.url;
+      text.appendChild(imgEl);
+    }
+  }
+  div.appendChild(text);
+
+  for (const aud of q.audios || []) {
+    const el = document.createElement('audio');
+    el.className = 'q-audio';
+    el.controls = true;
+    el.preload = 'none';
+    el.src = aud.localFile ? `/resources/${encodeURIComponent(aud.localFile)}` : aud.url;
+    div.appendChild(el);
+  }
+
+  if (isGapType) {
+    // controls already rendered inside the text flow
+  } else if (q.type === 'multichoice' || q.type === 'truefalse') {
+    const single = q.type === 'truefalse';
+    (q.options || []).forEach((o, oi) => {
+      const el = document.createElement('button');
+      el.type = 'button';
+      el.className = 'sim-opt' + (a.picked.includes(oi) ? ' picked' : '');
+      const strong = document.createElement('strong');
+      strong.textContent = o.letter;
+      el.appendChild(strong);
+      if (o.text) el.appendChild(document.createTextNode(' ' + o.text));
+      for (const img of o.optionImages || []) {
+        el.appendChild(document.createElement('br'));
+        const imgEl = document.createElement('img');
+        imgEl.className = 'opt-img';
+        imgEl.alt = 'option image';
+        imgEl.src = img.localFile ? `/resources/${encodeURIComponent(img.localFile)}` : img.url;
+        el.appendChild(imgEl);
+      }
+      el.addEventListener('click', () => {
+        if (single) a.picked = a.picked[0] === oi ? [] : [oi];
+        else a.picked = a.picked.includes(oi) ? a.picked.filter((x) => x !== oi) : [...a.picked, oi];
+        const next = renderSimAnswer(q, a);
+        const meta = $simBody.querySelector('.sim-meta');
+        $simBody.innerHTML = '';
+        if (meta) $simBody.appendChild(meta);
+        $simBody.appendChild(next);
+      });
+      div.appendChild(el);
+    });
+  } else if (q.subQuestions && q.subQuestions.length) {
+    // match / multianswer: one pick per stem
+    q.subQuestions.forEach((sub, si) => {
+      const subDiv = document.createElement('div');
+      subDiv.className = 'sub-q';
+      if (sub.questionText) {
+        const stemEl = document.createElement('div');
+        stemEl.className = 'sub-q-text';
+        stemEl.textContent = sub.questionText;
+        subDiv.appendChild(stemEl);
+      }
+      const sel = document.createElement('select');
+      sel.className = 'sim-gap';
+      const blank = document.createElement('option');
+      blank.value = '';
+      blank.textContent = '— elegir —';
+      sel.appendChild(blank);
+      (sub.options || []).forEach((o, oi) => {
+        const optEl = document.createElement('option');
+        optEl.value = String(oi);
+        optEl.textContent = o.text;
+        sel.appendChild(optEl);
+      });
+      sel.value = a.picked[si] != null ? String(a.picked[si]) : '';
+      sel.addEventListener('change', () => {
+        a.picked[si] = sel.value === '' ? null : parseInt(sel.value, 10);
+      });
+      subDiv.appendChild(sel);
+      div.appendChild(subDiv);
+    });
+  } else if (q.type === 'essay') {
+    const ta = document.createElement('textarea');
+    ta.className = 'sim-essay';
+    ta.placeholder = 'Escribe tu respuesta aquí…';
+    ta.value = a.picked[0] || '';
+    ta.addEventListener('input', () => {
+      a.picked[0] = ta.value;
+    });
+    div.appendChild(ta);
+  } else {
+    const hint = document.createElement('div');
+    hint.className = 'sim-hint';
+    hint.textContent = 'Pulsa «Comprobar» para ver la respuesta correcta y el feedback.';
+    div.appendChild(hint);
+  }
+  return div;
+}
+
+// Turn a bank question + the user's picks into the attempt-like shape
+// renderQuestion() expects, computing marks as a side effect.
+function buildAttempt(q, a) {
+  const copy = {
+    ...q,
+    options: (q.options || []).map((o) => ({ ...o, selected: false, markedIncorrect: false })),
+    subQuestions: (q.subQuestions || []).map((s) => ({
+      ...s,
+      options: (s.options || []).map((o) => ({ ...o, selected: false, markedIncorrect: false })),
+      selectedText: s.selectedText || '',
+      isCorrect: false,
+      isIncorrect: false,
+    })),
+  };
+  const markMax = q.markMax > 0 ? q.markMax : 1;
+  const isGapType = q.type === 'ddwtos' || q.type === 'gapselect';
+
+  if (isGapType) {
+    // Substitute the chosen option into each gap box, in order.
+    let gi = 0;
+    copy.questionText = String(q.questionText || '').replace(
+      /(<span class="ddwtos-answer">)[\s\S]*?(<\/span>)/g,
+      (m, p1, p2) => {
+        const val = a.picked ? a.picked[gi] : null;
+        const choice = val != null && q.options && q.options[val] ? q.options[val].text : '…';
+        gi++;
+        return p1 + choice + p2;
+      },
+    );
+    copy.isCorrect = false;
+    copy.isWrong = false;
+    copy.markObtained = 0;
+    copy.markMax = 0;
+    // The choice pool is only for the answer phase; hide it on reveal so it
+    // doesn't render as a duplicate option list next to the question.
+    copy.options = [];
+    a.markObtained = 0;
+    a.markMax = 0; // not scored (no per-gap correctness in the bank)
+    return copy;
+  }
+
+  if (q.type === 'multichoice' || q.type === 'truefalse') {
+    const correctIdx = new Set(
+      (q.options || []).map((o, i) => (o.markedCorrect ? i : -1)).filter((i) => i >= 0),
+    );
+    const picked = new Set(a.picked || []);
+    copy.options.forEach((o, i) => {
+      o.selected = picked.has(i);
+      o.markedIncorrect = picked.has(i) && !o.markedCorrect;
+    });
+    if (correctIdx.size === 0) {
+      // Nobody ever answered it correctly, so the right answer is unknown:
+      // show the user's picks in neutral, not as wrong.
+      copy.options.forEach((o, i) => {
+        o.selected = picked.has(i);
+        o.markedIncorrect = false;
+      });
+      copy.isCorrect = false;
+      copy.isWrong = false;
+      copy.markObtained = 0;
+      copy.markMax = 0;
+      a.markObtained = 0;
+      a.markMax = 0;
+    } else {
+      let matched = 0;
+      for (const i of picked) if (correctIdx.has(i)) matched++;
+      const exact = picked.size === correctIdx.size && [...correctIdx].every((i) => picked.has(i));
+      const pct = exact ? 1 : matched / correctIdx.size;
+      copy.isCorrect = exact;
+      copy.isWrong = !exact && matched === 0;
+      copy.markObtained = Math.round(pct * markMax * 100) / 100;
+      copy.markMax = markMax;
+      a.markObtained = copy.markObtained;
+      a.markMax = markMax;
+    }
+    return copy;
+  }
+
+  if (q.subQuestions && q.subQuestions.length) {
+    // match / multianswer: one selection per stem.
+    let scored = 0;
+    let total = 0;
+    copy.subQuestions = copy.subQuestions.map((s, si) => {
+      const corrIdx = (s.options || []).findIndex((o) => o.markedCorrect);
+      const pickedVal = a.picked ? a.picked[si] : null;
+      const userOpt = pickedVal != null && s.options[pickedVal] ? s.options[pickedVal] : null;
+      s.selectedText = userOpt ? userOpt.text : '';
+      if (corrIdx >= 0) {
+        total++;
+        if (userOpt && corrIdx === pickedVal) {
+          s.isCorrect = true;
+          s.isIncorrect = false;
+          scored++;
+        } else {
+          s.isCorrect = false;
+          s.isIncorrect = true;
+        }
+      } else {
+        s.isCorrect = false;
+        s.isIncorrect = false;
+      }
+      s.options.forEach((o, oi) => {
+        o.selected = oi === pickedVal;
+        o.markedIncorrect = oi === pickedVal && !o.markedCorrect;
+      });
+      return s;
+    });
+    if (total === 0) {
+      copy.isCorrect = false;
+      copy.isWrong = false;
+      copy.markObtained = 0;
+      copy.markMax = 0;
+      a.markObtained = 0;
+      a.markMax = 0;
+    } else {
+      const pct = scored / total;
+      copy.isCorrect = scored === total;
+      copy.isWrong = scored === 0;
+      copy.markObtained = Math.round(pct * markMax * 100) / 100;
+      copy.markMax = markMax;
+      a.markObtained = copy.markObtained;
+      a.markMax = markMax;
+    }
+    return copy;
+  }
+
+  if (q.type === 'essay') {
+    copy.essayResponse = (a.picked && a.picked[0]) || '';
+  }
+  copy.isCorrect = false;
+  copy.isWrong = false;
+  copy.markObtained = 0;
+  copy.markMax = 0;
+  a.markObtained = 0;
+  a.markMax = 0;
+  return copy;
+}
+
+function simSummary() {
+  let got = 0;
+  let max = 0;
+  let correct = 0;
+  let partial = 0;
+  let wrong = 0;
+  let unscored = 0;
+  for (const a of simState.answers) {
+    if (a.markMax > 0) {
+      got += a.markObtained || 0;
+      max += a.markMax;
+      if (a.markObtained >= a.markMax) correct++;
+      else if (a.markObtained > 0) partial++;
+      else wrong++;
+    } else {
+      unscored++;
+    }
+  }
+  const wrap = document.createElement('div');
+  wrap.className = 'sim-summary';
+  const title = document.createElement('div');
+  title.className = 'sim-summary-title';
+  title.textContent = 'Resumen de la práctica';
+  wrap.appendChild(title);
+  const stats = document.createElement('div');
+  stats.className = 'sim-summary-stats';
+  stats.textContent =
+    `✓ ${correct} correctas · ` +
+    `≈ ${partial} parciales · ` +
+    `✗ ${wrong} incorrectas` +
+    (unscored ? ` · ${unscored} sin calificar (texto/reordenar)` : '');
+  wrap.appendChild(stats);
+  const score = document.createElement('div');
+  score.className = 'sim-summary-score';
+  score.textContent = `Puntuación: ${Math.round(got * 100) / 100} / ${max}`;
+  wrap.appendChild(score);
+  const restart = document.createElement('button');
+  restart.type = 'button';
+  restart.className = 'sim-btn primary';
+  restart.textContent = '↻ Reiniciar';
+  restart.addEventListener('click', () => {
+    simState.answers = simState.questions.map(() => ({ picked: [], checked: false, markObtained: 0, markMax: 0 }));
+    simState.index = 0;
+    renderSimQuestion();
+  });
+  wrap.appendChild(restart);
+  return wrap;
 }
 </script>
 </body>

@@ -346,4 +346,4 @@ if (require.main === module) {
     });
 }
 
-module.exports = { isConfigured, syncServers, buildUniqueQuestions, uniqueKey };
+module.exports = { isConfigured, getFirestore, syncServers, buildUniqueQuestions, uniqueKey };
