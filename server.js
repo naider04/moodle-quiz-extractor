@@ -220,7 +220,47 @@ function matchAnswersFromFeedback(q) {
 // course (baseUrl + courseId) to its Firestore key.
 app.get('/api/simulator/courses', async (req, res) => {
   if (!fb.isConfigured()) {
-    return res.status(503).json({ error: 'El banco de preguntas no está configurado en este servidor.' });
+    // FALLBACK: If Firebase is not configured on the server, serve courses
+    // from the local quiz_study_data.json.
+    const jsonFile = path.join(outDir, 'quiz_study_data.json');
+    if (!fs.existsSync(jsonFile)) {
+      return res.status(503).json({ error: 'El banco de preguntas no está configurado y no hay datos locales.' });
+    }
+    try {
+      const parsed = JSON.parse(fs.readFileSync(jsonFile, 'utf8'));
+      const servers = Array.isArray(parsed) ? parsed : Object.values(parsed);
+      const courses = [];
+      for (const s of servers) {
+        const hostSlug = fb.slug(s.baseUrl.replace(/^https?:\/\//i, '').replace(/\/+$/, ''));
+        for (const c of s.courses || []) {
+          let quizCount = 0;
+          let qCount = 0;
+          for (const qz of c.quizzes || []) {
+            const attemptsData = qz.attemptsData || [];
+            if (!attemptsData.length) continue;
+            const unique = fb.buildUniqueQuestions(attemptsData);
+            if (!unique.length) continue;
+            quizCount++;
+            qCount += unique.length;
+          }
+          if (quizCount > 0) {
+            courses.push({
+              courseKey: `local__${hostSlug}__${c.courseId}`,
+              name: c.name,
+              courseId: c.courseId,
+              baseUrl: s.baseUrl,
+              quizCount,
+              questionCount: qCount,
+              updatedAt: new Date().toISOString(),
+            });
+          }
+        }
+      }
+      courses.sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')));
+      return res.json(courses);
+    } catch (err) {
+      return res.status(500).json({ error: `Error leyendo datos locales: ${err.message}` });
+    }
   }
   try {
     const db = fb.getFirestore();
@@ -250,9 +290,82 @@ app.get('/api/simulator/courses', async (req, res) => {
 app.get('/api/simulator/course', async (req, res) => {
   const courseKey = String(req.query.course || '');
   if (!courseKey) return res.status(400).json({ error: 'Falta el parámetro course.' });
-  if (!fb.isConfigured()) {
-    return res.status(503).json({ error: 'El banco de preguntas no está configurado en este servidor.' });
+  
+  if (!fb.isConfigured() || courseKey.startsWith('local__')) {
+    // FALLBACK: Load from the local quiz_study_data.json.
+    const jsonFile = path.join(outDir, 'quiz_study_data.json');
+    if (!fs.existsSync(jsonFile)) {
+      return res.status(404).json({ error: 'No hay datos locales disponibles.' });
+    }
+    try {
+      const parsed = JSON.parse(fs.readFileSync(jsonFile, 'utf8'));
+      const servers = Array.isArray(parsed) ? parsed : Object.values(parsed);
+      
+      // Parse courseKey to match: "local__{hostSlug}__{courseId}" or we just match by courseId
+      const parts = courseKey.split('__');
+      const targetCourseId = parts[parts.length - 1];
+      const targetHostSlug = parts[parts.length - 2];
+
+      let foundCourse = null;
+      let foundServer = null;
+      for (const s of servers) {
+        const hostSlug = fb.slug(s.baseUrl.replace(/^https?:\/\//i, '').replace(/\/+$/, ''));
+        if (targetHostSlug && hostSlug !== targetHostSlug) continue;
+        for (const c of s.courses || []) {
+          if (String(c.courseId) === String(targetCourseId)) {
+            foundCourse = c;
+            foundServer = s;
+            break;
+          }
+        }
+        if (foundCourse) break;
+      }
+
+      if (!foundCourse) {
+        return res.status(404).json({ error: 'Materia local no encontrada.' });
+      }
+
+      const quizzes = [];
+      const pooled = [];
+      for (const qz of foundCourse.quizzes || []) {
+        const attemptsData = qz.attemptsData || [];
+        if (!attemptsData.length) continue;
+        const unique = fb.buildUniqueQuestions(attemptsData);
+        if (!unique.length) continue;
+
+        quizzes.push({
+          quizId: qz.quizId,
+          name: qz.name,
+          cmid: qz.cmid || null,
+          attempts: attemptsData.length,
+          uniqueQuestionCount: unique.length,
+        });
+
+        for (const q of unique) {
+          const norm = normalizeSimQuestion(q);
+          norm.sourceQuiz = qz.name || '';
+          pooled.push(norm);
+        }
+      }
+
+      pooled.forEach((q, i) => {
+        q.questionNumber = i + 1;
+      });
+
+      return res.json({
+        courseKey: courseKey,
+        name: foundCourse.name,
+        courseId: foundCourse.courseId,
+        baseUrl: foundServer.baseUrl,
+        quizzes,
+        questionCount: pooled.length,
+        questions: pooled,
+      });
+    } catch (err) {
+      return res.status(500).json({ error: `Error leyendo curso local: ${err.message}` });
+    }
   }
+  
   try {
     const db = fb.getFirestore();
     const courseRef = db.collection('courses').doc(courseKey);
